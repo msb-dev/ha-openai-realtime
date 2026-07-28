@@ -160,15 +160,14 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
             name_words |= set(_norm(al).split())
         area_words = set(_norm(e.get("area") or "").split())
 
-        covered = 0
         strength = 0
         strong = False           # matched by something other than device_class
         value, unit = raw_state, attrs.get("unit_of_measurement")
         attr_value = None
+        covered_terms = set()
 
         for t in name_terms:
             w = 0
-            sig_strong = True
             if t in name_words:
                 w = _W_NAME
             elif t in area_words:
@@ -182,14 +181,21 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
                     if t in set(_norm(str(k)).split()):
                         w, attr_value = _W_ATTR, v
                         break
-                if w == 0:
-                    dcc = _SYNONYMS.get(t)
-                    if dcc and dcc == (attrs.get("device_class") or ""):
-                        w, sig_strong = _W_DC, False
             if w:
-                covered += 1
+                covered_terms.add(t)
                 strength += w
-                strong = strong or sig_strong
+                strong = True
+
+        # device_class is an additive tie-break toward the *right* class (so
+        # "Temperatur" prefers the temperature entity over its battery sibling),
+        # and it covers a synonym term not otherwise matched (bare "Akku").
+        edc = attrs.get("device_class") or ""
+        if edc and edc in dc_classes:
+            strength += _W_DC
+            for t in name_terms:
+                if t not in covered_terms and _SYNONYMS.get(t) == edc:
+                    covered_terms.add(t)
+        covered = len(covered_terms)
 
         if norm_name and (norm_name == _norm(fn) or any(norm_name == _norm(a) for a in aliases)):
             strength += 100
@@ -278,7 +284,11 @@ async def _fetch_registry(token: str) -> Tuple[Dict[str, str], Dict[str, List[st
     import websockets  # provided transitively by pipecat
 
     async def _run() -> Tuple[Dict[str, str], Dict[str, List[str]]]:
-        async with websockets.connect("ws://supervisor/core/api/websocket") as ws:
+        # max_size=None: the entity registry list on a large install exceeds the
+        # library's default 1 MiB frame cap (observed 1009 "message too big").
+        async with websockets.connect(
+            "ws://supervisor/core/api/websocket", max_size=None
+        ) as ws:
             await ws.recv()  # auth_required
             await ws.send(json.dumps({"type": "auth", "access_token": token}))
             if json.loads(await ws.recv()).get("type") != "auth_ok":

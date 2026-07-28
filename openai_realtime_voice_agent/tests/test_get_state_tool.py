@@ -158,6 +158,24 @@ def test_assist_alias_matches_strongly_and_avoids_clarify():
     assert r["text"].startswith("Solar SoC Battery")
 
 
+def test_device_class_breaks_ties_toward_the_right_class():
+    # One device exposes battery/humidity/temperature entities that all share
+    # the name+room. "Temperatur" must pick the temperature one, not its
+    # battery or humidity sibling.
+    states = [
+        st("sensor.ts_batt", "49", "Temperatursensor Schlafzimmer Battery",
+           device_class="battery", unit="%"),
+        st("sensor.ts_hum", "49.3", "Temperatursensor Schlafzimmer Humidity",
+           device_class="humidity", unit="%"),
+        st("sensor.ts_temp", "21.0", "Temperatursensor Schlafzimmer Temperature",
+           device_class="temperature", unit="°C"),
+    ]
+    r = select_states(states, "Temperatur Schlafzimmer")
+    assert r["kind"] == "answer"
+    assert r["text"].startswith("Temperatursensor Schlafzimmer Temperature")
+    assert "Battery" not in r["text"] and "Humidity" not in r["text"]
+
+
 def test_query_of_only_stopwords_returns_none():
     states = [st("sensor.wz_temp", "21.5", "Wohnzimmer Temperatur",
                  device_class="temperature", unit="°C")]

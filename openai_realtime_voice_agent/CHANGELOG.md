@@ -2,6 +2,16 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.6
+
+Two fixes on top of 0.6.5:
+
+- **device_class now breaks ties toward the right kind of entity** — asking for
+  a "Temperatur" in a room no longer returns the room sensor's battery or
+  humidity value instead of its temperature.
+- **Registry lookup no longer trips the 1 MiB WebSocket frame limit** on large
+  installs, so areas and aliases actually load (they silently fell back before).
+
 ## 0.6.5
 
 Much better natural-language entity matching in `get_entity_state`:
