@@ -4,24 +4,31 @@ A DIRECT Home Assistant state read that bypasses the MCP `GetLiveContext` tool.
 GetLiveContext (from the official mcp_server integration) does not surface sensor
 *values* to the Realtime model — control tools and person lookups work, but
 "how full is the battery?" / "what's the PV output?" return nothing. This tool
-reads `GET /api/states` from HA core using the add-on's supervisor token and
-selects the best-matching entity via :func:`select_states`, returning the
-value(s) as a short, spoken-friendly string.
+reads HA state and selects the best-matching entity via :func:`select_states`,
+returning the value(s) as a short, spoken-friendly string.
 
 `select_states` is a *pure* function (no I/O) so the matching logic is unit
-tested — see ``tests/test_get_state_tool.py``. Matching rules:
+tested — see ``tests/test_get_state_tool.py``. It matches a natural-language
+query against each entity's friendly-name, entity_id, **Assist aliases**, its
+**HA area** and its device_class. Ranking is *coverage-first*: the entity that
+accounts for the most distinct query words wins, so "Temperatur Büro" prefers a
+sensor that matches both the value type AND the room over one that only matches
+the type. Query words are normalised, German filler words are dropped, and
+compounds are decomposed ("Solarleistung" -> "solar" + "leistung") so the model
+does not have to guess the exact entity name.
 
-* dead states (``unavailable``/``unknown``/``none``/empty) are skipped;
-* a hit on the entity's name/entity_id outweighs a hit on its device_class, so
-  a specifically-named sensor wins over a generic one of the same class;
-* a query word that names an attribute returns that attribute instead of the
-  bare state;
-* a bare device_class query with several candidates ("Akku") asks back which one
-  instead of guessing;
-* at most two entities are spoken.
+The handler enriches the live `/api/states` read with each entity's effective
+area and its Assist aliases, fetched together in one Home Assistant WebSocket
+session (area/device/entity registry lists). It is cached with a TTL and fails
+*soft*: if the lookup breaks, matching falls back to name/device_class only —
+never worse than before, and the pure stopword/compound/coverage logic still
+applies.
 """
+import asyncio
+import json
 import logging
-from typing import Dict, Any, List, Callable, Awaitable, TYPE_CHECKING
+import time
+from typing import Dict, Any, List, Callable, Awaitable, Tuple, TYPE_CHECKING
 
 import httpx
 
@@ -35,7 +42,8 @@ logger = logging.getLogger(__name__)
 # friendly-name is in another language (e.g. an English "... SoC Battery").
 _SYNONYMS = {
     "akku": "battery", "batterie": "battery", "ladestand": "battery",
-    "ladung": "battery", "soc": "battery",
+    "ladung": "battery", "soc": "battery", "akkustand": "battery",
+    "batteriestand": "battery",
     "temperatur": "temperature", "temp": "temperature",
     "feuchtigkeit": "humidity", "luftfeuchtigkeit": "humidity", "feuchte": "humidity",
     "leistung": "power", "strom": "power", "watt": "power",
@@ -56,6 +64,31 @@ _META_ATTR_KEYS = {
     "entity_picture", "supported_features", "attribution", "state_class",
     "assumed_state", "restored",
 }
+# Generic filler words to drop from a query so they can't hijack the match
+# (e.g. "aktuelle" matching "Aktuelle Seite"). Kept deliberately small.
+_STOPWORDS = {
+    "aktuelle", "aktueller", "aktuelles", "aktuell", "der", "die", "das",
+    "den", "dem", "des", "ein", "eine", "einen", "einem", "im", "in", "am",
+    "an", "auf", "von", "vom", "zum", "zur", "wie", "viel", "wieviel", "ist",
+    "sind", "war", "grad", "gerade", "momentan", "jetzt", "wert", "werte",
+    "stand", "status", "mein", "meine", "meiner", "unser", "unsere", "wo",
+    "welche", "welcher", "welches", "gibt", "es", "und", "mir", "sag",
+    "zeig", "nochmal", "bitte", "hier", "da", "denn",
+}
+# Compound tails: split "<prefix><tail>" into prefix + tail so a spoken compound
+# still matches a two-word entity name / a device_class synonym.
+_COMPOUND_TAILS = (
+    "leistung", "temperatur", "temperaturen", "luftfeuchtigkeit",
+    "feuchtigkeit", "feuchte", "verbrauch", "spannung", "zaehler", "stand",
+    "ladung", "level", "zeit",
+)
+
+# Coverage/strength weights per matched query term (best signal wins).
+_W_NAME = 10   # word hit on friendly-name / entity_id / alias
+_W_ATTR = 8    # word hit on an attribute key ("Restzeit")
+_W_AREA = 6    # word hit on the entity's HA area
+_W_SUB = 3     # substring hit on a name word (German compounds)
+_W_DC = 2      # device_class implied by a synonym
 
 
 def _norm(s: str) -> str:
@@ -65,8 +98,30 @@ def _norm(s: str) -> str:
     return s
 
 
-def _tokens(s: str) -> List[str]:
-    return [t for t in _norm(s).split() if len(t) > 1]
+def _query_terms(name: str) -> Tuple[set, set]:
+    """Return (name_terms, dc_classes) for a query.
+
+    Drops filler words, decomposes German compounds, and derives implied
+    device_classes from synonyms. name_terms are matched against entity
+    names/aliases/areas; dc_classes against device_class.
+    """
+    raw = [t for t in _norm(name).split() if len(t) > 1]
+    toks: List[str] = []
+    for t in raw:
+        toks.append(t)
+        for tail in _COMPOUND_TAILS:
+            if t != tail and t.endswith(tail) and len(t) - len(tail) >= 3:
+                toks.append(t[: -len(tail)])
+                toks.append(tail)
+                break
+    name_terms, dc = set(), set()
+    for t in toks:
+        if len(t) <= 1 or t in _STOPWORDS:
+            continue
+        name_terms.add(t)
+        if t in _SYNONYMS:
+            dc.add(_SYNONYMS[t])
+    return name_terms, dc
 
 
 def _join_names(names: List[str]) -> str:
@@ -75,83 +130,98 @@ def _join_names(names: List[str]) -> str:
     return f"{', '.join(names[:-1])} oder {names[-1]}"
 
 
-def select_states(states: List[Dict[str, Any]], name: str, limit: int = 2) -> Dict[str, str]:
+def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> Dict[str, str]:
     """Pick the entity/entities that best answer a value question about *name*.
 
-    Returns a dict ``{"kind": "answer"|"clarify"|"none", "text": "<spoken>"}``.
-    Pure function: no network, no side effects.
+    Each entity is ``{entity_id, state, attributes, area, aliases}``. Returns
+    ``{"kind": "answer"|"clarify"|"none", "text": "<spoken>"}``. Pure function.
     """
-    q_tokens = _tokens(name)
-    dc_implied = {_SYNONYMS[t] for t in q_tokens if t in _SYNONYMS}
+    name_terms, dc_classes = _query_terms(name)
     norm_name = _norm(name).strip()
+    if not name_terms:
+        return {"kind": "none", "text": f"Ich habe keinen Wert für „{name}“ gefunden."}
 
     scored: List[Dict[str, Any]] = []
-    for s in states:
-        eid = s.get("entity_id", "")
+    for e in entities:
+        eid = e.get("entity_id", "")
         if eid.split(".", 1)[0] not in _READ_DOMAINS:
             continue
-        raw_state = s.get("state")
+        raw_state = e.get("state")
         if str(raw_state or "").strip().lower() in _DEAD_STATES:
             continue
 
-        attrs = s.get("attributes", {}) or {}
+        attrs = e.get("attributes", {}) or {}
         fn = attrs.get("friendly_name") or eid
+        aliases = [a for a in (e.get("aliases") or []) if a]
         name_words = set(_norm(fn).split()) | set(
             _norm(eid.replace(".", " ").replace("_", " ")).split()
         )
-        whole = [t for t in q_tokens if t in name_words]
-        sub = [
-            t for t in q_tokens
-            if t not in name_words and len(t) >= 3 and any(t in w for w in name_words)
-        ]
-        dc = attrs.get("device_class") or ""
-        dc_hit = 1 if dc and dc in dc_implied else 0
-        exact = 1 if norm_name and _norm(fn) == norm_name else 0
+        for al in aliases:
+            name_words |= set(_norm(al).split())
+        area_words = set(_norm(e.get("area") or "").split())
 
-        score = 100 * exact + 10 * len(whole) + 3 * len(sub) + 2 * dc_hit
-        if score == 0:
-            continue
-
-        # If a query word names an attribute (e.g. "Restzeit"), speak that
-        # attribute's value instead of the bare state.
+        covered = 0
+        strength = 0
+        strong = False           # matched by something other than device_class
         value, unit = raw_state, attrs.get("unit_of_measurement")
-        for k, v in attrs.items():
-            if k in _META_ATTR_KEYS:
-                continue
-            if any(t in set(_norm(str(k)).split()) for t in q_tokens):
-                value, unit = v, None
-                break
+        attr_value = None
 
+        for t in name_terms:
+            w = 0
+            sig_strong = True
+            if t in name_words:
+                w = _W_NAME
+            elif t in area_words:
+                w = _W_AREA
+            elif len(t) >= 3 and any(t in ww for ww in name_words):
+                w = _W_SUB
+            else:
+                for k, v in attrs.items():
+                    if k in _META_ATTR_KEYS:
+                        continue
+                    if t in set(_norm(str(k)).split()):
+                        w, attr_value = _W_ATTR, v
+                        break
+                if w == 0:
+                    dcc = _SYNONYMS.get(t)
+                    if dcc and dcc == (attrs.get("device_class") or ""):
+                        w, sig_strong = _W_DC, False
+            if w:
+                covered += 1
+                strength += w
+                strong = strong or sig_strong
+
+        if norm_name and (norm_name == _norm(fn) or any(norm_name == _norm(a) for a in aliases)):
+            strength += 100
+            strong = True
+            covered = max(covered, 1)
+
+        if covered == 0:
+            continue
+        if attr_value is not None:
+            value, unit = attr_value, None
         scored.append({
-            "score": score,
-            "nmc": len(whole) + len(sub),  # name-match count
-            "spec": len(fn),               # shorter name == more specific
-            "fn": fn,
-            "value": value,
-            "unit": unit,
+            "covered": covered, "strength": strength, "strong": strong,
+            "spec": len(fn), "fn": fn, "value": value, "unit": unit,
         })
 
     if not scored:
         return {"kind": "none", "text": f"Ich habe keinen Wert für „{name}“ gefunden."}
 
-    scored.sort(key=lambda c: (-c["score"], -c["nmc"], c["spec"]))
+    scored.sort(key=lambda c: (-c["covered"], -c["strength"], c["spec"]))
     best = scored[0]
+    top = [c for c in scored
+           if c["covered"] == best["covered"] and c["strength"] == best["strength"]]
 
-    if best["nmc"] == 0:
-        # Only a device_class matched — ambiguous when several qualify ("Akku").
-        if len(scored) >= 2:
+    if not best["strong"]:
+        # Only device_class matched — ambiguous when several qualify ("Akku").
+        if len(top) >= 2:
             names = [c["fn"] for c in scored[:3]]
-            return {
-                "kind": "clarify",
-                "text": f"Ich habe mehrere Werte für „{name}“ — meinst du {_join_names(names)}?",
-            }
+            return {"kind": "clarify",
+                    "text": f"Ich habe mehrere Werte für „{name}“ — meinst du {_join_names(names)}?"}
         chosen = scored[:1]
     else:
-        # Real name match found. Return only the *equally-best* matches, never
-        # pad up to `limit` with a weaker entity that merely shares one generic
-        # token (e.g. a named "... SoC" must not append a random battery at 0 %).
-        best_score = best["score"]
-        chosen = [c for c in scored if c["score"] == best_score][:limit]
+        chosen = top[:limit]
 
     parts = []
     for c in chosen:
@@ -170,9 +240,10 @@ def get_state_tool_definition() -> Dict[str, Any]:
             "by name. Use this for ANY question about a value or status — battery "
             "or SoC, PV / solar production, power, energy, temperature, humidity, "
             "CO2, air quality, a person's location/room, washing-machine time "
-            "left, car range/fuel, whether a window is open, etc. Prefer this tool "
-            "for reading values; do NOT use it to control devices (use the Hass* "
-            "tools for that). If it asks which entity you mean, relay that question."
+            "left, car range/fuel, whether a window is open, etc. You may include "
+            "the room in the query. Prefer this tool for reading values; do NOT "
+            "use it to control devices (use the Hass* tools for that). If it asks "
+            "which entity you mean, relay that question."
         ),
         "parameters": {
             "type": "object",
@@ -183,13 +254,82 @@ def get_state_tool_definition() -> Dict[str, Any]:
                         "What to look up, in natural language and in the user's "
                         "language, e.g. a battery/SoC, solar production, the "
                         "temperature of a room, a person's location, or an "
-                        "appliance's status."
+                        "appliance's status. Naming the room helps."
                     ),
                 }
             },
             "required": ["name"],
         },
     }
+
+
+# --- live enrichment (effective area + Assist aliases), cached, fail-soft ---
+
+_REGISTRY_TTL = 600.0
+_registry_cache: Dict[str, Any] = {"ts": 0.0, "area": {}, "aliases": {}}
+
+
+async def _fetch_registry(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """(area_map, alias_map) from one HA WebSocket session.
+
+    Reads area/device/entity registries and resolves each entity's *effective*
+    area (its own area_id, else its device's) plus its Assist aliases.
+    """
+    import websockets  # provided transitively by pipecat
+
+    async def _run() -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+        async with websockets.connect("ws://supervisor/core/api/websocket") as ws:
+            await ws.recv()  # auth_required
+            await ws.send(json.dumps({"type": "auth", "access_token": token}))
+            if json.loads(await ws.recv()).get("type") != "auth_ok":
+                raise RuntimeError("HA WS auth failed")
+
+            async def call(cmd_id: int, typ: str):
+                await ws.send(json.dumps({"id": cmd_id, "type": typ}))
+                while True:
+                    m = json.loads(await ws.recv())
+                    if m.get("id") == cmd_id and m.get("type") == "result":
+                        return m.get("result") or []
+
+            areas = await call(1, "config/area_registry/list")
+            devices = await call(2, "config/device_registry/list")
+            entities = await call(3, "config/entity_registry/list")
+
+        area_by_id = {a["area_id"]: a.get("name", "") for a in areas}
+        dev_area = {d["id"]: d.get("area_id") for d in devices}
+        area_map, alias_map = {}, {}
+        for ent in entities:
+            eid = ent.get("entity_id")
+            if not eid:
+                continue
+            aid = ent.get("area_id") or dev_area.get(ent.get("device_id"))
+            if aid and area_by_id.get(aid):
+                area_map[eid] = area_by_id[aid]
+            al = [a for a in (ent.get("aliases") or []) if a]
+            if al:
+                alias_map[eid] = al
+        return area_map, alias_map
+
+    return await asyncio.wait_for(_run(), timeout=8)
+
+
+async def _enrich(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+    """Return (area_map, alias_map), refreshing the TTL cache. Fail-soft."""
+    now = time.monotonic()
+    if now - _registry_cache["ts"] < _REGISTRY_TTL and (
+        _registry_cache["area"] or _registry_cache["aliases"]
+    ):
+        return _registry_cache["area"], _registry_cache["aliases"]
+    try:
+        area_map, alias_map = await _fetch_registry(token)
+        _registry_cache["area"], _registry_cache["aliases"] = area_map, alias_map
+        logger.info(f"get_entity_state: registry loaded ({len(area_map)} areas, "
+                    f"{len(alias_map)} aliased entities)")
+    except Exception as e:
+        logger.warning(f"get_entity_state: registry lookup failed ({e}); "
+                       "matching without areas/aliases")
+    _registry_cache["ts"] = now  # back off retries to the TTL either way
+    return _registry_cache["area"], _registry_cache["aliases"]
 
 
 def create_get_state_tool_handler(
@@ -214,6 +354,12 @@ def create_get_state_tool_handler(
                 resp = await client.get(f"{base_url}/states", headers=headers)
                 resp.raise_for_status()
                 states = resp.json()
+            area_map, alias_map = await _enrich(supervisor_token)
+
+            for s in states:
+                eid = s.get("entity_id", "")
+                s["area"] = area_map.get(eid)
+                s["aliases"] = alias_map.get(eid, [])
 
             result = select_states(states, name)
             logger.info(f"📊 get_entity_state [{result['kind']}]: {result['text'][:200]}")

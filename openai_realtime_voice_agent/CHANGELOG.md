@@ -2,6 +2,19 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.5
+
+Much better natural-language entity matching in `get_entity_state`:
+
+- Drops filler words, so "aktuelle …" / "wie viel …" can't hijack the match.
+- Decomposes German compounds ("Solarleistung" → solar + power).
+- Ranks by how many query words an entity actually covers (value type **and**
+  room), not by a raw token count — so "Temperatur Büro" prefers a sensor in
+  that room over one that merely has "Temperatur" in its name.
+- Also matches your **Assist aliases** and each entity's **HA area/room**
+  (fetched once from the registry and cached; fails soft if unavailable).
+- Says "not found" instead of guessing when nothing really matches.
+
 ## 0.6.4
 
 Tidy the `get_entity_state` tool docstring and examples. No behavioural change.
