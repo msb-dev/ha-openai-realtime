@@ -24,6 +24,7 @@ wheels/
 *.egg
 
 .venv/
+.venv-test/
 
 # IDE
 .vscode/

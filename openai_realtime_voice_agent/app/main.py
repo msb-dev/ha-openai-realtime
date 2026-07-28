@@ -14,6 +14,7 @@ from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TURN_LIVENESS
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
 from app.web_search_tool import get_web_search_tool_definition, create_web_search_tool_handler
+from app.get_state_tool import get_state_tool_definition, create_get_state_tool_handler
 from app.audio_recording_service import AudioRecordingService
 from app.session_manager import SessionManager
 from app.websocket_handler import WebSocketHandler
@@ -541,6 +542,12 @@ class Application:
             if self.enable_web_search:
                 all_tools.append(get_web_search_tool_definition())
 
+            # Direct HA state-read tool. Bypasses the MCP GetLiveContext tool,
+            # which does not surface sensor *values* to the model. Enabled
+            # whenever we have a token to reach HA core.
+            if os.environ.get("LONGLIVED_TOKEN") or os.environ.get("SUPERVISOR_TOKEN"):
+                all_tools.append(get_state_tool_definition())
+
             # Get MCP tool definitions if available
             mcp_tools_schema = None
             if self.mcp_client:
@@ -684,7 +691,17 @@ class Application:
                     create_web_search_tool_handler(self.openai_api_key, self.web_search_model),
                 )
                 logger.info(f"✅ Registered web_search tool handler (model={self.web_search_model})")
-            
+
+            # Register the direct HA state-read tool handler (bypasses MCP
+            # GetLiveContext for reading sensor values).
+            _ha_token = os.environ.get("LONGLIVED_TOKEN") or os.environ.get("SUPERVISOR_TOKEN")
+            if _ha_token:
+                self.openai_service.register_function(
+                    "get_entity_state",
+                    create_get_state_tool_handler(_ha_token),
+                )
+                logger.info("✅ Registered get_entity_state tool handler")
+
             # Register MCP tool handlers if available
             if self.mcp_client and mcp_tools_schema:
                 try:

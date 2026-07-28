@@ -2,6 +2,25 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.3
+
+`get_entity_state` now returns **only the best-scoring match** instead of
+padding the answer up to two. On homes with many same-class sensors this stops
+a specific request from trailing an unrelated sensor of the same class.
+
+## 0.6.2
+
+Smarter `get_entity_state` reads (the tool that answers value/status questions
+like "how full is the battery?" or "what's the solar production?"):
+
+- Skips `unavailable` / `unknown` sensors instead of reading them out.
+- A match on the entity's **name** now beats a match on its device_class, so a
+  specifically-named sensor no longer loses to a generic one of the same class.
+- Asks back which one you mean when a bare word (e.g. "battery") fits several
+  sensors, instead of guessing.
+- A word that names an **attribute** returns that attribute, not the bare state.
+- Speaks at most two matches. Selection logic is now unit-tested.
+
 ## 0.6.0
 
 > ⚠️ **This update has two parts — please update both:**
