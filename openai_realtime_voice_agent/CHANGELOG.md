@@ -2,6 +2,13 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.7
+
+Assist **aliases now actually load**. The registry *list* command omits
+aliases, so 0.6.5/0.6.6 matched on area only; this fetches full entries via
+`config/entity_registry/get_entries`, so the natural-language names you set on
+an entity ("Akkustand", "Stromerzeugung", …) resolve directly.
+
 ## 0.6.6
 
 Two fixes on top of 0.6.5:

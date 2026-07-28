@@ -294,23 +294,30 @@ async def _fetch_registry(token: str) -> Tuple[Dict[str, str], Dict[str, List[st
             if json.loads(await ws.recv()).get("type") != "auth_ok":
                 raise RuntimeError("HA WS auth failed")
 
-            async def call(cmd_id: int, typ: str):
-                await ws.send(json.dumps({"id": cmd_id, "type": typ}))
+            async def call(cmd_id: int, typ: str, extra: dict = None):
+                msg = {"id": cmd_id, "type": typ}
+                if extra:
+                    msg.update(extra)
+                await ws.send(json.dumps(msg))
                 while True:
                     m = json.loads(await ws.recv())
                     if m.get("id") == cmd_id and m.get("type") == "result":
-                        return m.get("result") or []
+                        return m.get("result")
 
-            areas = await call(1, "config/area_registry/list")
-            devices = await call(2, "config/device_registry/list")
-            entities = await call(3, "config/entity_registry/list")
+            areas = await call(1, "config/area_registry/list") or []
+            devices = await call(2, "config/device_registry/list") or []
+            # The list command omits aliases; get_entries returns full entries
+            # (aliases + area_id + device_id) in one bulk call.
+            listing = await call(3, "config/entity_registry/list") or []
+            eids = [e["entity_id"] for e in listing if e.get("entity_id")]
+            full = await call(4, "config/entity_registry/get_entries",
+                              {"entity_ids": eids}) or {}
 
         area_by_id = {a["area_id"]: a.get("name", "") for a in areas}
         dev_area = {d["id"]: d.get("area_id") for d in devices}
         area_map, alias_map = {}, {}
-        for ent in entities:
-            eid = ent.get("entity_id")
-            if not eid:
+        for eid, ent in full.items():
+            if not ent:
                 continue
             aid = ent.get("area_id") or dev_area.get(ent.get("device_id"))
             if aid and area_by_id.get(aid):
@@ -333,8 +340,8 @@ async def _enrich(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     try:
         area_map, alias_map = await _fetch_registry(token)
         _registry_cache["area"], _registry_cache["aliases"] = area_map, alias_map
-        logger.info(f"get_entity_state: registry loaded ({len(area_map)} areas, "
-                    f"{len(alias_map)} aliased entities)")
+        logger.info(f"get_entity_state: registry loaded ({len(area_map)} with area, "
+                    f"{len(alias_map)} with aliases)")
     except Exception as e:
         logger.warning(f"get_entity_state: registry lookup failed ({e}); "
                        "matching without areas/aliases")
