@@ -155,6 +155,38 @@ def test_assist_alias_matches_strongly_and_avoids_clarify():
     ]
     r = select_states(states, "Akkustand")
     assert r["kind"] == "answer"
+    # asked by alias -> the alias is spoken back (friendly-name has no overlap)
+    assert r["text"].startswith("Akkustand")
+    assert "54" in r["text"]
+
+
+def test_speaks_matched_alias_when_friendly_name_is_unhelpful():
+    # A window contact whose friendly-name is the useless "Öffnung"; the user's
+    # alias must be spoken, not "Öffnung".
+    states = [st("binary_sensor.fk_kueche", "off", "Öffnung",
+                 device_class="opening", aliases=["Küchenfenster", "Fenster Küche"])]
+    r = select_states(states, "Küchenfenster")
+    assert r["kind"] == "answer"
+    assert r["text"].startswith("Küchenfenster")
+    assert "Öffnung" not in r["text"]
+
+
+def test_entity_id_match_does_not_keep_a_useless_friendly_name():
+    # entity_id carries "waschmaschine" but the friendly-name is just
+    # "Leistung"; the alias must still be spoken.
+    states = [st("sensor.shelly_waschmaschine_leistung", "5", "Leistung",
+                 device_class="power", unit="W", aliases=["Waschmaschine"])]
+    r = select_states(states, "Waschmaschine")
+    assert r["text"].startswith("Waschmaschine")
+    assert "Leistung" not in r["text"]
+
+
+def test_keeps_friendly_name_when_it_matched_the_query():
+    # If the query hit the friendly-name, keep it (more informative) even when
+    # an alias also exists.
+    states = [st("sensor.x", "54", "Solar SoC Battery", device_class="battery",
+                 unit="%", aliases=["Akkustand"])]
+    r = select_states(states, "Solar SoC")
     assert r["text"].startswith("Solar SoC Battery")
 
 

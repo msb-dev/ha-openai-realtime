@@ -153,11 +153,13 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
         attrs = e.get("attributes", {}) or {}
         fn = attrs.get("friendly_name") or eid
         aliases = [a for a in (e.get("aliases") or []) if a]
-        name_words = set(_norm(fn).split()) | set(
+        fn_words = set(_norm(fn).split()) | set(
             _norm(eid.replace(".", " ").replace("_", " ")).split()
         )
-        for al in aliases:
-            name_words |= set(_norm(al).split())
+        alias_sets = [(al, set(_norm(al).split())) for al in aliases]
+        name_words = set(fn_words)
+        for _al, _aw in alias_sets:
+            name_words |= _aw
         area_words = set(_norm(e.get("area") or "").split())
 
         strength = 0
@@ -206,9 +208,29 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
             continue
         if attr_value is not None:
             value, unit = attr_value, None
+
+        # Spoken label: normally the friendly-name, but if the friendly-name
+        # contributed nothing to the match (e.g. it's a useless "Öffnung" /
+        # "Leistung") and an alias did, speak the best-matching alias instead.
+        # Judge only against the *displayed* friendly-name, not the entity_id.
+        fn_only = set(_norm(fn).split())
+
+        def _hits(words):
+            return sum(1 for t in name_terms
+                       if t in words or (len(t) >= 3 and any(t in w for w in words)))
+        label = fn
+        if _hits(fn_only) == 0:
+            best_al, best_n = None, 0
+            for al, aw in alias_sets:
+                n = _hits(aw)
+                if n > best_n or (n == best_n and n > 0 and len(al) > len(best_al or "")):
+                    best_al, best_n = al, n
+            if best_al and best_n > 0:
+                label = best_al
+
         scored.append({
             "covered": covered, "strength": strength, "strong": strong,
-            "spec": len(fn), "fn": fn, "value": value, "unit": unit,
+            "spec": len(fn), "fn": fn, "label": label, "value": value, "unit": unit,
         })
 
     if not scored:
@@ -222,7 +244,7 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
     if not best["strong"]:
         # Only device_class matched — ambiguous when several qualify ("Akku").
         if len(top) >= 2:
-            names = [c["fn"] for c in scored[:3]]
+            names = [c["label"] for c in scored[:3]]
             return {"kind": "clarify",
                     "text": f"Ich habe mehrere Werte für „{name}“ — meinst du {_join_names(names)}?"}
         chosen = scored[:1]
@@ -232,7 +254,7 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
     parts = []
     for c in chosen:
         unit_s = f" {c['unit']}" if c["unit"] else ""
-        parts.append(f"{c['fn']}: {c['value']}{unit_s}")
+        parts.append(f"{c['label']}: {c['value']}{unit_s}")
     return {"kind": "answer", "text": "; ".join(parts)}
 
 

@@ -2,6 +2,15 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.8
+
+`get_entity_state` now speaks the **matched alias** when the entity's
+friendly-name added nothing to the match. Entities with a generic
+friendly-name (e.g. a window contact called "Öffnung", or a power sensor
+called "Leistung") are answered as "Küchenfenster: off" / "Waschmaschine: 5 W"
+instead of the useless technical name. If the query hit the friendly-name, it
+is kept (more informative).
+
 ## 0.6.7
 
 Assist **aliases now actually load**. The registry *list* command omits
