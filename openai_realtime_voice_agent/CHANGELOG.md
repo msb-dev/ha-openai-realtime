@@ -2,6 +2,10 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.4
+
+Tidy the `get_entity_state` tool docstring and examples. No behavioural change.
+
 ## 0.6.3
 
 `get_entity_state` now returns **only the best-scoring match** instead of
