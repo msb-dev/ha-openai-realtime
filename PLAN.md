@@ -55,7 +55,14 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
       (no project cards on web.esphome.io); re-provision Wi-Fi via
       Configure Wi-Fi over USB (improv); HA Reconfigure re-negotiates the
       API encryption key.
-- [ ] Decide proxy runtime: standalone Docker container on LAN box.
+- [x] Decide proxy runtime: standalone Docker container on LAN box.
+      Decided: host-networked compose service on the x86_64 LAN box, port
+      8090 (8080 taken by zigbee2mqtt). Build with
+      BUILD_FROM=ghcr.io/home-assistant/amd64-base; bypass the addon
+      run.sh (bashio::config needs Supervisor) via
+      `command: python3 -m app.main` + env vars. HA MCP at
+      http://127.0.0.1:8123/api/mcp with long-lived token (secrets.env:
+      OPENAI_API_KEY, LONGLIVED_TOKEN).
 
 ### Phase 1 — Unmodified stack end-to-end on OpenAI
 - [ ] Build + flash fork firmware as-is (`secrets.yaml` with `server_url`).
