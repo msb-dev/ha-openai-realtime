@@ -66,6 +66,14 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
 
 ### Phase 1 — Unmodified stack end-to-end on OpenAI
 - [ ] Build + flash fork firmware as-is (`secrets.yaml` with `server_url`).
+      Build done: compiles clean under esphome 2025.11.5 (docker image);
+      `home-assistant-voice-pe/ha-voice-openai.factory.bin` ready to flash
+      via web.esphome.io → Connect → Install → upload file.
+      `secrets.yaml` created with generated api/ota keys and
+      server_url ws://192.168.1.2:8090; wifi creds are placeholders —
+      fill them in before flashing, or provision via BLE improv /
+      USB (Configure Wi-Fi) afterwards.
+      Flash pending (device + laptop needed).
 - [x] Run server unchanged (Docker) against HA MCP with long-lived token.
       Done: standalone host-networked container (`voice-agent` in the
       homeautomation compose), WS listening on 0.0.0.0:8090, HA MCP at
@@ -118,8 +126,8 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
       (3) Ultravox backend descriptor.
 
 ## Risks / open questions
-- Firmware builds against current ESPHome + this hardware revision (unverified
-  until Phase 1 flash test) — biggest unknown.
+- Firmware builds against esphome 2025.11.5 (verified); still unverified on
+  the hardware itself until the Phase 1 flash test.
 - Ultravox interruption event contract + speculative tool behavior (verify via
   Ultravox research, Phase 4).
 - `SessionManager` is OpenAI-shaped; needs per-backend strategy (Phase 4).
