@@ -56,7 +56,8 @@ RUN \
     && echo "LLVM_CONFIG_PATH=$LLVM_CONFIG_PATH" \
     && export LLVM_CONFIG="${LLVM_CONFIG_PATH:-/usr/bin/llvm-config}" \
     && echo "Using LLVM_CONFIG=$LLVM_CONFIG" \
-    && rm -f poetry.lock* \
+    && pip3 install --no-cache-dir --break-system-packages --no-build-isolation "numpy==1.26.4" \
+    && LLVM_CONFIG="$LLVM_CONFIG" pip3 install --no-cache-dir --break-system-packages --no-build-isolation "llvmlite==0.44.0" "numba==0.61.2" \
     && LLVM_CONFIG="$LLVM_CONFIG" POETRY_VIRTUALENVS_CREATE=false poetry install --only=main --no-root --no-interaction --no-ansi \
     && rm -f pyproject.toml \
     && rm -rf openai_realtime_voice_agent/
