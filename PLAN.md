@@ -4,7 +4,7 @@ Project goal: keep this project's Voice PE → local server → realtime LLM arc
 add **true barge-in** (currently half-duplex), make the realtime backend **pluggable**
 (OpenAI Realtime and Ultravox), and move HA tool access fully onto the LAN.
 
-## Codebase findings (Phase 0.3)
+## Codebase findings
 
 ### Firmware (`home-assistant-voice-pe/`)
 - Custom ESPHome component `voice_assistant_websocket`.
@@ -46,14 +46,11 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
 ## Phases
 
 ### Phase 0 — Setup & verification
-- [x] 0.3 Clone repo; read firmware + server code.
-- [ ] 0.2 Ultravox API contract: confirm realtime WS endpoint, audio format
-      (expect 16kHz/16-bit/mono), client-side `function` tool semantics,
-      interruption events, session reuse/keep-alive.
-- [ ] 0.1 Stock Voice PE onboarded to HA (no pipeline) — done.
-- [ ] 0.4 Rehearse USB re-flash of stock firmware via web.esphome.io (Chrome;
+- [x] Clone repo; read firmware + server code.
+- [x] Stock Voice PE onboarded to HA (no pipeline).
+- [ ] Rehearse USB re-flash of stock firmware via web.esphome.io (Chrome;
       hold button while plugging if device doesn't enumerate). Re-adopt in HA.
-- [ ] 0.5 Decide proxy runtime: standalone Docker container on LAN box.
+- [ ] Decide proxy runtime: standalone Docker container on LAN box.
 
 ### Phase 1 — Unmodified stack end-to-end on OpenAI
 - [ ] Build + flash fork firmware as-is (`secrets.yaml` with `server_url`).
@@ -84,6 +81,9 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
 - [ ] **Milestone:** same device, switch backend via server config, no reflash.
 
 ### Phase 4 — Ultravox backend
+- [ ] Ultravox API contract: confirm realtime WS endpoint, audio format
+      (expect 16kHz/16-bit/mono), client-side `function` tool semantics,
+      interruption events, session reuse/keep-alive.
 - [ ] Backend descriptor + pipecat `UltravoxRealtimeLLMService` integration;
       client-side `function` tools only (no inbound exposure of HA).
 - [ ] Session strategy: long-lived Ultravox sessions vs. OpenAI-style
@@ -103,6 +103,7 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
 ## Risks / open questions
 - Firmware builds against current ESPHome + this hardware revision (unverified
   until Phase 1 flash test) — biggest unknown.
-- Ultravox interruption event contract + speculative tool behavior (verify 0.2).
+- Ultravox interruption event contract + speculative tool behavior (verify via
+  Ultravox research, Phase 4).
 - `SessionManager` is OpenAI-shaped; needs per-backend strategy (Phase 4).
 - pipecat API churn; pin the installed version.
