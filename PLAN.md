@@ -48,8 +48,13 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
 ### Phase 0 — Setup & verification
 - [x] Clone repo; read firmware + server code.
 - [x] Stock Voice PE onboarded to HA (no pipeline).
-- [ ] Rehearse USB re-flash of stock firmware via web.esphome.io (Chrome;
+- [x] Rehearse USB re-flash of stock firmware via web.esphome.io (Chrome;
       hold button while plugging if device doesn't enumerate). Re-adopt in HA.
+      Verified: connect to "USB JTAG/serial debug unit" port → Install →
+      upload factory bin from esphome/home-assistant-voice-pe releases
+      (no project cards on web.esphome.io); re-provision Wi-Fi via
+      Configure Wi-Fi over USB (improv); HA Reconfigure re-negotiates the
+      API encryption key.
 - [ ] Decide proxy runtime: standalone Docker container on LAN box.
 
 ### Phase 1 — Unmodified stack end-to-end on OpenAI
