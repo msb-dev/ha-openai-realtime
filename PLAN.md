@@ -66,7 +66,12 @@ add **true barge-in** (currently half-duplex), make the realtime backend **plugg
 
 ### Phase 1 — Unmodified stack end-to-end on OpenAI
 - [ ] Build + flash fork firmware as-is (`secrets.yaml` with `server_url`).
-- [ ] Run server unchanged (Docker) against HA MCP with long-lived token.
+- [x] Run server unchanged (Docker) against HA MCP with long-lived token.
+      Done: standalone host-networked container (`voice-agent` in the
+      homeautomation compose), WS listening on 0.0.0.0:8090, HA MCP at
+      127.0.0.1:8123/api/mcp; 20 Assist tools fetched and registered.
+      Note: HA `mcp_server` integration had to be added once (config entry
+      "Assist") before `/api/mcp` stopped 404-ing.
 - [ ] **Milestone:** wake word → conversation → HA commands work (half-duplex).
 
 ### Phase 2 — Barge-in behind a flag (default off = Phase 1 behavior)
