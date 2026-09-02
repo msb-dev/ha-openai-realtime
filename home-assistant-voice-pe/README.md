@@ -5,7 +5,8 @@ It is mainly based on https://github.com/esphome/home-assistant-voice-pe.
 
 ## Prerequisites
 
-- ESPHome 2025.11.0 or higher
+- ESPHome 2026.6.0 or higher
+  (required for reliable wake-word detection: wake-word model allocation is broken on 2025.11-2026.3)
 - Voice PE Hardware (Home Assistant Voice Pod Edition) or compatible ESP32-S3 device
 - Home Assistant with the OpenAI Realtime Addon installed and running
 - Python 3.11+ with Poetry
