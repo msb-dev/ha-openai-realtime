@@ -1,0 +1,47 @@
+# Standalone container image — run the voice agent WITHOUT Home Assistant
+# Supervisor (Home Assistant Container, plain Docker, Kubernetes, ...).
+#
+# The add-on Dockerfile in this directory targets Home Assistant OS: hassio
+# base image, s6-overlay, and a bashio run.sh that maps add-on options to
+# environment variables. None of that is needed here — the app is configured
+# purely through environment variables either way, so this image skips the
+# Supervisor plumbing and runs the app directly.
+#
+#   Build:  docker build -f Dockerfile.standalone -t openai-realtime-voice-agent .
+#   Run:    see compose.yaml next to this file
+#
+# Base: python:3.12-slim. glibc matters — pipecat's llvmlite/numba install
+# from prebuilt manylinux wheels here instead of compiling against a specific
+# LLVM (see the comment in Dockerfile for the history of that problem).
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# ffmpeg + libsndfile1 cover the audio decode/encode paths in pipecat.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install the app and its dependencies (PEP 517 via poetry-core, same flow as
+# the add-on build). No lockfile: deps resolve to wheels on glibc.
+COPY pyproject.toml /tmp/app_build/pyproject.toml
+COPY app/ /tmp/app_build/app/
+RUN pip3 install /tmp/app_build \
+    && rm -rf /tmp/app_build
+
+# App code at /app so `python3 -m app.main` picks it up and recordings
+# (ENABLE_RECORDING=true) land in a predictable place.
+COPY app/ /app/
+
+RUN useradd --system --home /app agent \
+    && mkdir -p /app/recordings \
+    && chown -R agent:agent /app
+WORKDIR /app
+USER agent
+
+EXPOSE 8080
+
+CMD ["python3", "-m", "app.main"]

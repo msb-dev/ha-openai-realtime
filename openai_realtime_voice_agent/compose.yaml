@@ -1,0 +1,41 @@
+# Standalone deployment example — for Home Assistant Container, plain Docker,
+# Kubernetes, or any host without the Home Assistant Supervisor.
+#
+#   1. create a .env next to this file (see .env.example)
+#   2. docker compose up -d --build
+#   3. point the Voice PE firmware at this host: ws://<host>:8080/
+#
+# The add-on (Supervisor) users don't need any of this — install the add-on
+# instead. See the repository README.
+
+services:
+  voice-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.standalone
+    image: openai-realtime-voice-agent:latest
+    restart: unless-stopped
+    # host networking keeps things simple on a Linux box that also runs Home
+    # Assistant (the MCP URL below reaches it on 127.0.0.1) and lets the device
+    # reach the agent on the same port on any interface. Prefer a bridge
+    # network? Replace with:
+    #   ports:
+    #     - "8080:8080"
+    # and set HA_MCP_URL to the address Home Assistant listens on
+    # (e.g. http://homeassistant:8123/api/mcp).
+    network_mode: host
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # --- required -------------------------------------------------------
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?set OPENAI_API_KEY in .env}
+      - LONGLIVED_TOKEN=${LONGLIVED_TOKEN:?create a long-lived HA token and put it in .env}
+      # --- connection -----------------------------------------------------
+      - HA_MCP_URL=${HA_MCP_URL:-http://127.0.0.1:8123/api/mcp}
+      - WEBSOCKET_PORT=${WEBSOCKET_PORT:-8080}
+      # --- model & conversation (all optional; see DOCS.md) ---------------
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-realtime-2}
+      - OPENAI_VOICE=${OPENAI_VOICE:-marin}
+      - ENABLE_WEB_SEARCH=${ENABLE_WEB_SEARCH:-true}
+      - TZ=${TZ:-UTC}

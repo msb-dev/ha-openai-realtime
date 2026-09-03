@@ -1,0 +1,13 @@
+# Keep build contexts small and secrets out of images.
+.git
+.gitignore
+**/__pycache__/
+**/*.py[cod]
+tests/
+.pytest_cache/
+.pytest.ini
+Dockerfile*
+compose.yaml
+.env
+.env.*
+recordings/

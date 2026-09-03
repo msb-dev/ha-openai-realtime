@@ -51,6 +51,32 @@ The **device firmware** lives in its own repository —
 (An optional GitHub Actions workflow can publish container images to ghcr.io; it
 isn't needed for a normal local-build install.)
 
+### Install on Home Assistant Container (or any plain Docker host)
+
+Home Assistant **Container** has no add-on store — but the agent is just a
+container app configured by environment variables, so it runs anywhere Docker
+runs. A dedicated image definition and a ready-made compose file live in
+[`openai_realtime_voice_agent/`](openai_realtime_voice_agent/):
+
+1. Copy `.env.example` to `.env` in `openai_realtime_voice_agent/` and fill in
+   your OpenAI API key, a Home Assistant **long-lived access token**, and the
+   address Home Assistant's MCP server listens on.
+2. Build and start it:
+   ```
+   cd openai_realtime_voice_agent
+   docker compose up -d --build
+   ```
+3. Point the device firmware at the agent (`va_url: ws://<host>:8080/` in the
+   firmware's per-device stub) — same as in the add-on flow.
+
+The compose file uses host networking so the agent reaches a same-host Home
+Assistant on `127.0.0.1` and the device reaches the agent directly; swap it for
+a port mapping and set `HA_MCP_URL` accordingly if you prefer a bridge network.
+Every add-on option has an environment-variable equivalent (see
+[`DOCS.md`](openai_realtime_voice_agent/DOCS.md)), so Kubernetes manifests or
+any other orchestrator work the same way — the container only needs the
+environment and a reachable port.
+
 ## How it works
 
 ```
