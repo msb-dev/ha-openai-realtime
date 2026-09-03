@@ -59,8 +59,18 @@ class Application:
         vad_prefix_padding_ms = int(os.environ.get("VAD_PREFIX_PADDING_MS", "300"))
         vad_silence_duration_ms = int(os.environ.get("VAD_SILENCE_DURATION_MS", "500"))
         
-        # Get instructions with default
-        instructions = os.environ.get("INSTRUCTIONS", "You are the Home Assistant Voice Agent and can control the Smart Home.")
+        # Get language for the wake-word acknowledgement and responses.
+        # Defaults to English but can be changed via the LANGUAGE env var.
+        language = os.environ.get("LANGUAGE", "English").strip()
+
+        # Get instructions with default, folding in the configured language.
+        # A full INSTRUCTIONS override still takes precedence if set.
+        default_instructions = (
+            f"You are the Home Assistant Voice Agent and can control the Smart Home. "
+            f"When the user wakes you, acknowledge the wake word briefly, then respond "
+            f"to their request. Always respond in {language}."
+        )
+        instructions = os.environ.get("INSTRUCTIONS", default_instructions)
         
         # Get recording setting (optional, defaults to false)
         enable_recording = os.environ.get("ENABLE_RECORDING", "false").lower() == "true"

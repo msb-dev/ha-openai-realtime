@@ -41,7 +41,8 @@ async def to_code(config):
     await cg.register_component(var, config)
     
     # Add ESP-IDF components
-    if CORE.using_esp_idf:
+    # (CORE.using_esp_idf was removed in ESPHome 2026.x)
+    if CORE.target_framework == "esp-idf":
         # WebSocket client component
         # Note: esp_websocket_client is a subdirectory in esp-protocols
         # We need to add the entire repository and reference the component path

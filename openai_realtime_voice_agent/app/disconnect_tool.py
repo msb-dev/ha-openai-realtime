@@ -16,7 +16,7 @@ def get_disconnect_tool_definition() -> Dict[str, Any]:
     return {
         "type": "function",
         "name": "disconnect_client",
-        "description": "Disconnect the voice assistant session when the user says goodbye, farewell, stop, or only thank you without additional questions and wants to end the conversation. Use this when the user explicitly wants to end the conversation or says phrases like 'Auf Wiedersehen', 'Tschüss', 'Stop', 'Beenden', 'Ende', etc.",
+        "description": "Disconnect the voice assistant session when the user says goodbye, farewell, stop, or only thank you without additional questions and wants to end the conversation. Use this when the user explicitly wants to end the conversation or says phrases like 'Goodbye', 'Bye', 'Stop', 'Good night', 'End', etc.",
         "parameters": {
             "type": "object",
             "properties": {
