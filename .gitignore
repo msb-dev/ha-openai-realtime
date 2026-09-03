@@ -53,3 +53,6 @@ recordings/
 
 # Secrets
 .env
+
+# ESPHome secrets for the firmware directory (contains Wi-Fi credentials)
+home-assistant-voice-pe/secrets.yaml
