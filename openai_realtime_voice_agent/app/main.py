@@ -13,6 +13,7 @@ from pipecat.transports.websocket.server import WebsocketServerTransport
 from app.mcp_service import HomeAssistantMCPService
 from app.phase_emitter import TURN_LIVENESS
 from app.disconnect_tool import get_disconnect_tool_definition, create_disconnect_tool_handler
+from app.end_conversation_tool import get_end_conversation_tool_definition, create_end_conversation_handler
 from app.web_search_tool import get_web_search_tool_definition, create_web_search_tool_handler
 from app.get_state_tool import get_state_tool_definition, create_get_state_tool_handler
 from app.audio_recording_service import AudioRecordingService
@@ -537,6 +538,15 @@ class Application:
             if self.enable_disconnect_tool:
                 all_tools.append(get_disconnect_tool_definition())
 
+            # end_conversation tool (always on). Sends a {"type":"stop_session"}
+            # control message to the device, which ends the session locally
+            # (mic off, no follow-up window, back to wake word) without tearing
+            # down the WebSocket. Companion to the barge-in experiment: with
+            # server-VAD barge-in the spoken "stop" often becomes a normal turn,
+            # and without this tool the device would sit in the 8 s follow-up
+            # listening window afterwards.
+            all_tools.append(get_end_conversation_tool_definition())
+
             # Web search tool (optional). Lets the model look things up online via
             # a secondary OpenAI Responses web_search call in the handler.
             if self.enable_web_search:
@@ -683,6 +693,15 @@ class Application:
                 disconnect_tool_handler = create_disconnect_tool_handler(self.websocket_transport)
                 self.openai_service.register_function("disconnect_client", disconnect_tool_handler)
                 logger.info("✅ Registered disconnect tool handler")
+
+            # Register end_conversation tool handler (tool always exposed).
+            # broadcast_json delivers {"type":"stop_session"} to every connected
+            # device; single-device setups are the norm, so broadcasting is fine.
+            self.openai_service.register_function(
+                "end_conversation",
+                create_end_conversation_handler(self.websocket_handler.broadcast_json),
+            )
+            logger.info("✅ Registered end_conversation tool handler")
 
             # Register web search tool handler (only when the tool is exposed)
             if self.enable_web_search:

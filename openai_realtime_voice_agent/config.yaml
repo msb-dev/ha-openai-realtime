@@ -1,5 +1,5 @@
 name: OpenAI Realtime 2 Voice Agent
-version: "0.6.8"
+version: "0.6.9"
 slug: openai_realtime_voice_agent
 description: Talk to your home with OpenAI gpt-realtime-2 — a voice agent for the Home Assistant Voice PE, with live device control and web search.
 url: https://github.com/xandervanerven/ha-openai-realtime
@@ -56,6 +56,11 @@ options:
     BEHAVIOR: Carry out requested actions immediately with your tools and never
     guess. If you are unsure which device, room, or action is meant, ask a short
     clarifying question first. If something fails, briefly say what went wrong.
+    ENDING: If the user clearly wants to end the conversation or silence you —
+    they say just "stop", "never mind", "goodbye" or "that's all" with no other
+    request — call the end_conversation tool; say nothing first. Never call it
+    when "stop" is part of a device command like "stop the music" — that is a
+    Home Assistant action, not the end of the conversation.
   transcription_language: ""
 
   # --- 🗣️ Model & voice ---

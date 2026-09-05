@@ -2,6 +2,18 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.9
+
+New **`end_conversation` tool**: when the user clearly wants to stop ("stop",
+"never mind", "goodbye" with no other request), the model now calls this tool
+and the device ends the session immediately — mic off, no follow-up listening
+window, straight back to wake word. Previously the spoken "stop" became a
+normal turn, the device answered, then sat in the 8-second follow-up window
+before returning to wake word. The message is a lightweight
+`{"type":"stop_session"}` control frame; unlike the (still opt-in)
+`disconnect_client` tool, the WebSocket is never torn down. Pairs with the
+`barge_in: true` firmware experiment (server-VAD barge-in).
+
 ## 0.6.8
 
 `get_entity_state` now speaks the **matched alias** when the entity's
