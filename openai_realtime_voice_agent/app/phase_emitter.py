@@ -325,7 +325,28 @@ class PhaseEmitter(FrameProcessor):
         elif isinstance(frame, BotStoppedSpeakingFrame):
             # Don't go idle immediately — TTS comes in segments. Only emit idle
             # if the bot stays silent for the debounce window.
-            self._cancel_pending_idle()
-            self._idle_task = asyncio.create_task(self._emit_idle_after_debounce())
+            #
+            # EXCEPT when the user is already mid-utterance (_current ==
+            # "listening"): a CANCELLED reply's output drain lags seconds behind
+            # the device interrupt (OpenAI burst the full TTS; the backend
+            # streams it to the device at real-time pace, which discards it),
+            # and its BotStoppedSpeakingFrame lands AFTER the user's next turn
+            # started. Arming the debounce here fires idle MID-UTTERANCE: the
+            # device closes its mic on the user's words, the audio stream stops,
+            # and OpenAI's server VAD never emits speech_stopped — so the turn
+            # never commits and the device sits in dead air (observed
+            # 2026-11-14: stop mid-reply → wake → "continue speaking" → light
+            # off, total silence; BotStopped landed 8 ms after the new turn's
+            # listening and the debounce fired 1.5 s later, mid-sentence).
+            # A bot that genuinely stops while the user speaks cannot happen
+            # with the mic gated during replies (barge_in: false), so
+            # "listening" here is always this stale-drain artifact. Recovery
+            # for a turn that never gets its VAD stop: the device's own
+            # no-speech watchdog (flush) and the 15 s thinking-watchdog.
+            if self._current == "listening":
+                logger.info("📞 stale BotStopped during user speech — not arming idle debounce")
+            else:
+                self._cancel_pending_idle()
+                self._idle_task = asyncio.create_task(self._emit_idle_after_debounce())
 
         await self.push_frame(frame, direction)

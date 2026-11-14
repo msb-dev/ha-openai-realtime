@@ -2,6 +2,21 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.10
+
+**Fixed: "stop, then speak again → total silence" (dead-air turn).** A
+cancelled reply's TTS keeps draining through the backend at real-time pace
+(the device discards it), and the drain's `BotStoppedSpeakingFrame` can land
+*seconds* after the stop — often right after the user's next turn already
+started. That frame unconditionally re-armed the 1.5 s idle debounce, which
+then fired mid-utterance: the device closed its mic on the user's words, the
+audio stream stopped, OpenAI's server VAD never emitted `speech_stopped`, so
+the turn never committed — no response, LED off (observed with the raw-event
+trace: `speech_started` at 04.667, stale `BotStopped` at 04.675, debounce
+idle at 06.177, then nothing). The `BotStopped` handler no longer arms the
+idle debounce while the user is actively speaking (`listening`) — with the
+mic gated during replies that state is always the stale-drain artifact.
+
 ## 0.6.9
 
 New **`end_conversation` tool**: when the user clearly wants to stop ("stop",
