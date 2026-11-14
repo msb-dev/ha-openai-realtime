@@ -2,6 +2,21 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.12
+
+- **Carryover cap raised 12 → 100** (`MAX_CONTEXT_MESSAGES`): conversations
+  continue with up to 100 carried messages plus the context note. Cost note:
+  carried history is text transcripts, re-billed each turn.
+- **Device interrupt is now a conversation boundary.** A spoken "stop"
+  (mid-reply or in the follow-up window), the center button, or a
+  wake-during-reply trims the server-side conversation and injects the
+  carryover note IMMEDIATELY (~1.5 s after the interrupt, so the
+  response.cancel settles) instead of waiting for the silence timeout — after
+  a bare "stop" the device suppresses the follow-up window, so no flush would
+  ever arrive and the trim waited for the next conversation's end. If the
+  user wakes and speaks inside the delay window, the rollover skips itself
+  gracefully and the next boundary catches up.
+
 ## 0.6.11
 
 **Conversation-scoped context management (the carryover design).** Context is

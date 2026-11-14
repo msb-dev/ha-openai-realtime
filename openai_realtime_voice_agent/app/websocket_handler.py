@@ -644,6 +644,18 @@ class WebSocketHandler:
         # the user to actually speak — so it can never cancel a real turn.
         _kill_next_response = {"v": False}
 
+        # The device interrupt IS a conversation boundary in every case it can
+        # fire: the local stop word, the center button, a wake-during-reply
+        # (interrupt+wake pair = starting fresh), or the stop_session handler
+        # (which sends its own interrupt). Trigger a rollover so the server-side
+        # conversation trims IMMEDIATELY — don't wait for the silence timeout.
+        # Two subtleties:
+        #   - delayed ~1.5s so the response.cancel (sent just above) settles
+        #     before items are deleted server-side;
+        #   - if the user wakes and speaks inside that window, the rollover's
+        #     busy-check skips it gracefully — the next boundary catches up.
+        # Deduped against the end_conversation-tool-triggered rollover by the
+        # rollover's own _rolling guard.
         async def _on_device_interrupt():
             _interrupt_kill_until["t"] = time.monotonic() + INTERRUPT_KILL_WINDOW_S
             # Arm the next-response kill on EVERY stop (see the flag comment):
@@ -663,6 +675,24 @@ class WebSocketHandler:
                     logger.info("🛑 device interrupt → no active response to cancel (device already silenced)")
             except Exception as e:
                 logger.info(f"🛑 device interrupt → response.cancel no-op ({e!r})")
+            # The device interrupt IS a conversation boundary in every case it
+            # can fire: the local stop word, the center button, a
+            # wake-during-reply (interrupt+wake pair = starting fresh), or the
+            # stop_session handler (which sends its own interrupt). Trim the
+            # server-side conversation IMMEDIATELY rather than waiting for the
+            # silence timeout — after a bare "stop" the device suppresses the
+            # follow-up window, so no flush would ever arrive to trigger one.
+            # Delayed ~1.5s so the response.cancel above settles before items
+            # are deleted server-side; if the user wakes and speaks inside
+            # that window, the rollover's busy-check skips it gracefully and
+            # the next boundary catches up. Deduped against the
+            # end_conversation-tool-triggered rollover by the rollover's own
+            # _rolling guard.
+            async def _rollover_after_interrupt():
+                await asyncio.sleep(1.5)
+                await rollover.rollover("device interrupt (stop/button/wake)")
+
+            asyncio.create_task(_rollover_after_interrupt())
 
         @openai_service.event_handler("on_conversation_item_created")
         async def _track_conversation_items(service, item_id, item):
