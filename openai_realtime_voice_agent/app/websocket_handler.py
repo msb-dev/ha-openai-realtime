@@ -147,6 +147,14 @@ class ConnectionRecovery(FrameProcessor):
         "sent 1011",
         "sent 1001",
         "1006",
+        # 1013 "Try Again Later" — OpenAI rejects events this way while the
+        # account has no credit (insufficient_quota.credit_balance_exhausted,
+        # observed live 2026-11-14: every mic-frame send errored, the flood
+        # matched NO marker, and the session sat dead — no reconnect — until a
+        # backend restart). Reconnecting on 1013 is correct: with cooldown, the
+        # session self-heals the moment the account has credit again.
+        "sent 1013",
+        "insufficient_quota",
     )
     # Substrings that UNAMBIGUOUSLY mean OUR OpenAI session is gone and must be
     # reconnected, regardless of how the error surfaced. The 60-minute cap can
@@ -169,10 +177,15 @@ class ConnectionRecovery(FrameProcessor):
     REFRESH_QUIET_S = 60.0    # ... and no mic audio flowed for this long
     REFRESH_CHECK_S = 60.0    # poll cadence of the background check
 
-    def __init__(self, openai_service, emit_idle=None, phase_emitter=None, **kwargs):
+    def __init__(self, openai_service, emit_idle=None, phase_emitter=None, on_reconnected=None, **kwargs):
         super().__init__(**kwargs)
         self._service = openai_service
         self._emit_idle = emit_idle  # async callable(value:str), e.g. broadcast_phase
+        # Optional async callable called after a successful in-place reconnect.
+        # Used to replay the carried context into the fresh session — pipecat's
+        # own one-time history setup never runs on in-place resets (see
+        # conversation_rollover.replay_carryover_after_reconnect).
+        self._on_reconnected = on_reconnected
         # Preferred idle route: PhaseEmitter.force_idle() keeps the emitter's
         # phase state consistent AND suppresses the racing `thinking` from VAD
         # stop events still in flight (observed: a raw broadcast idle was
@@ -267,6 +280,11 @@ class ConnectionRecovery(FrameProcessor):
                 f"✅ OpenAI Realtime session reconnected in {self._connected_at - t0:.1f}s "
                 f"(gap the user may have heard)"
             )
+            if self._on_reconnected is not None:
+                try:
+                    await self._on_reconnected()
+                except Exception as e:
+                    logger.warning(f"⚠️ post-reconnect carryover replay failed: {e!r}")
         except Exception as e:
             logger.error(f"❌ OpenAI reconnect attempt failed: {e!r}")
         finally:
@@ -450,7 +468,33 @@ class WebSocketHandler:
         if self.session_manager:
             context_aggregator = self.session_manager.create_context_aggregator(client_id)
             context_initializer = self.session_manager.create_context_initializer(client_id, context_aggregator)
-        
+
+        # Conversation rollover: per-session item tracker + trim-on-boundary
+        # (see conversation_rollover.py). The tracker is fed from the
+        # on_conversation_item_created event handler registered below.
+        from app.conversation_rollover import ConversationItemTracker, ConversationRollover, replay_carryover_after_reconnect
+        item_tracker = ConversationItemTracker()
+        rollover = ConversationRollover(openai_service, item_tracker, max_carryover=12)
+        self._rollover = rollover
+        self._rollover_client_id = client_id
+        # After an in-place OpenAI reconnect (proactive 55-min refresh, error
+        # recovery) the fresh session starts empty — replay the carried context.
+        async def _on_reconnected():
+            cached = None
+            if self.session_manager:
+                pair = self.session_manager.context_aggregators.get(client_id)
+                if pair is not None:
+                    cached = pair.user()._context
+            messages = cached.get_messages() if cached is not None else []
+            # Bound the replay the same way the cache-restore path does.
+            carry = messages[-12:] if len(messages) > 12 else messages
+            ended_at = None
+            if self.session_manager and client_id in self.session_manager.context_caches:
+                ended_at = self.session_manager.context_caches[client_id].ended_at
+            await replay_carryover_after_reconnect(
+                openai_service, carry, ended_at if ended_at is not None else time.time(), item_tracker
+            )
+
         # Build pipeline components. InputResampler runs FIRST (right after the
         # transport) so every later stage — VAD, context aggregator, OpenAI
         # service — sees correctly-rated 24 kHz audio instead of the device's
@@ -467,7 +511,7 @@ class WebSocketHandler:
             # to the task source, so place this upstream of the service) and
             # reconnect in place. Without it a 1011/1001 drop bricks the session.
             ConnectionRecovery(openai_service=openai_service, emit_idle=self.broadcast_phase,
-                               phase_emitter=phase_emitter),
+                               phase_emitter=phase_emitter, on_reconnected=_on_reconnected),
             InputResampler(out_rate=PIPELINE_SAMPLE_RATE),
             input_activity_tracker,
         ]
@@ -621,6 +665,13 @@ class WebSocketHandler:
                 logger.info(f"🛑 device interrupt → response.cancel no-op ({e!r})")
 
         @openai_service.event_handler("on_conversation_item_created")
+        async def _track_conversation_items(service, item_id, item):
+            # Conversation rollover bookkeeping: mirror the server-side
+            # conversation's item order so conversation.item.delete can trim it
+            # at conversation boundaries (see conversation_rollover.py).
+            item_tracker.add(item_id, item)
+
+        @openai_service.event_handler("on_conversation_item_created")
         async def _kill_racing_response(service, item_id, item):
             # Pipecat fires this for every conversation.item.added; only an
             # ASSISTANT item right after a device interrupt is the racing
@@ -671,6 +722,12 @@ class WebSocketHandler:
                 logger.info("🧽 follow-up cut-off → input_audio_buffer.clear (drop partial utterance)")
             except Exception as e:
                 logger.debug(f"🧽 mic-flush input clear no-op ({e!r})")
+            # The silence timeout is a conversation boundary (agreed design:
+            # every boundary carries the last 12 items into the next
+            # conversation). Trim the server-side conversation + inject the
+            # context note. Runs as a task: the rollover waits out any
+            # in-flight response itself and must not block frame flow.
+            asyncio.create_task(rollover.rollover("follow-up window timed out (silence)"))
 
         async def _on_device_wake():
             # va_client sends {"type":"wake"} on every wake (start_session). Mark
@@ -708,6 +765,20 @@ class WebSocketHandler:
 
         return pipeline, runner, task
     
+    def trigger_rollover(self, reason: str) -> None:
+        """Schedule a conversation rollover on the current device's session.
+
+        Public hook for the end_conversation tool (and any future boundary
+        source). The rollover itself waits out any in-flight response and is
+        skipped safely if no pipeline is active (backend just started, device
+        never connected, or mid-reconnect).
+        """
+        rollover = getattr(self, "_rollover", None)
+        if rollover is None:
+            logger.info(f"⏭️ rollover skipped — no active device pipeline ({reason[:50]})")
+            return
+        asyncio.create_task(rollover.rollover(reason))
+
     def extract_client_id(self, websocket) -> str:
         """
         Extract client ID from websocket connection.

@@ -2,6 +2,36 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.11
+
+**Conversation-scoped context management (the carryover design).** Context is
+now managed at CONVERSATION boundaries, uniformly:
+
+- **During a conversation** (wake → "stop"/silence) the history is unbounded;
+  OpenAI's own `truncation: auto` degrades gracefully at the model's input
+  limit (oldest items dropped, instructions kept).
+- **At every boundary** — spoken "stop" (end_conversation tool), the silence
+  timeout (device flush), an OpenAI reconnect (proactive 55-min refresh or
+  error recovery), and a new device WebSocket connection — the next
+  conversation continues with the **last 12 messages plus a timestamped
+  context note**, and nothing more. The note carries an absolute wall-clock
+  time ("the most recent previous conversation ended at 19:58 on Saturday 14
+  November") so the model knows the carried messages are from an earlier
+  exchange rather than a live one — it can pair that with GetDateTime to
+  reason about elapsed time.
+- In-place boundaries (stop, silence) are implemented by trimming the
+  **server-side** conversation with `conversation.item.delete` and injecting
+  the note as a user item — instant, no reconnect gap. Session-changing
+  boundaries (refresh, reconnect) replay the carried context into the fresh
+  session as one packed user item (pipecat's own one-time history setup never
+  runs on in-place resets, which was silently wiping memory on every
+  55-minute refresh — fixed).
+- The context cache no longer expires (`SESSION_REUSE_TIMEOUT_SECONDS` is now
+  vestigial): carried context is always available, with staleness handled by
+  the note instead of forgetting.
+- **System prompt now includes the user's home location** (Cambridge, UK) so
+  weather/local questions stop asking for the city.
+
 ## 0.6.10
 
 **Fixed: "stop, then speak again → total silence" (dead-air turn).** A

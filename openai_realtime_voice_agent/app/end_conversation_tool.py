@@ -7,7 +7,7 @@ exactly like a local "stop" word: silence playback, gate the mic, suppress the
 follow-up listening window, back to wake word. The socket stays up.
 """
 import logging
-from typing import Any, Callable, Awaitable, Dict, TYPE_CHECKING
+from typing import Any, Callable, Awaitable, Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pipecat.services.llm_service import FunctionCallParams
@@ -38,6 +38,7 @@ def get_end_conversation_tool_definition() -> Dict[str, Any]:
 
 def create_end_conversation_handler(
     broadcast: Callable[[dict], Awaitable[None]],
+    on_ended: Optional[Callable[[str], None]] = None,
 ) -> Callable[["FunctionCallParams"], Awaitable[None]]:
     """
     Create the tool handler for Pipecat's OpenAI Realtime Service.
@@ -45,6 +46,10 @@ def create_end_conversation_handler(
     Args:
         broadcast: async callable that delivers a JSON dict to the connected
             device(s) (WebSocketHandler.broadcast_json).
+        on_ended: optional sync callable(reason) that schedules the
+            conversation rollover (context trim + carryover note) — called
+            after the stop_session message is sent (WebSocketHandler.
+            trigger_rollover).
     """
     async def end_conversation_handler(params: "FunctionCallParams") -> None:
         """Send stop_session to the device(s); the firmware ends the session."""
@@ -55,6 +60,17 @@ def create_end_conversation_handler(
             logger.warning(f"⚠️ could not send stop_session to device: {e!r}")
             await params.result_callback("Error: could not reach the device to end the session.")
             return
+        # The device is ending the session (mic off, back to wake word) — this
+        # is a conversation boundary, so trim the server-side conversation and
+        # inject the carryover context note (agreed design: every conversation
+        # ends with the last 12 items carried into the next one). Scheduled as
+        # a task: the rollover waits out the in-flight response itself, and the
+        # tool result should return promptly.
+        if on_ended is not None:
+            try:
+                on_ended("end_conversation tool (spoken stop/goodbye)")
+            except Exception as e:
+                logger.warning(f"⚠️ could not schedule conversation rollover: {e!r}")
         await params.result_callback("Session ended. The device is back in wake-word mode.")
 
     return end_conversation_handler

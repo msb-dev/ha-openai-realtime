@@ -408,24 +408,30 @@ class Application:
             playback_prebuffer_ms = 150
         playback_prebuffer_ms = max(0, min(2000, playback_prebuffer_ms))
 
-        # Get session reuse timeout and initialize session manager
-        session_reuse_timeout = float(os.environ.get("SESSION_REUSE_TIMEOUT_SECONDS", "300"))
-        # Cap on restored conversation history (0 = unlimited). Bounds per-turn
-        # tokens so a long chat doesn't trip OpenAI's TPM rate limit (gpt-realtime
-        # re-bills the whole conversation on every response; pipecat has no
-        # truncation). Default 12 keeps recent continuity cheaply.
+        # Initialize session manager. reuse_timeout is vestigial (kept only for
+        # wiring compatibility): since the 2026-11-14 carryover design, the
+        # cache never expires — every conversation boundary ("stop", silence
+        # timeout, WS drop, refresh) trims to the carryover set and the next
+        # conversation always continues from it, with a timestamped context
+        # note. See session_manager.py and conversation_rollover.py.
+        # Cap on carried conversation history (0 = unlimited): bounds the
+        # per-turn token cost across conversation boundaries (gpt-realtime
+        # re-bills the whole server-side conversation on every response).
+        # Within a conversation the history is unbounded; OpenAI's own
+        # `truncation: auto` degrades gracefully at the model's input limit
+        # (oldest items dropped, instructions kept).
         try:
             max_context_messages = int(os.environ.get("MAX_CONTEXT_MESSAGES", "12"))
         except (TypeError, ValueError):
             max_context_messages = 12
         max_context_messages = max(0, max_context_messages)
         self.session_manager = SessionManager(
-            reuse_timeout=session_reuse_timeout,
+            reuse_timeout=float(os.environ.get("SESSION_REUSE_TIMEOUT_SECONDS", "300")),
             max_restored_messages=max_context_messages,
         )
         logger.info(
-            f"Session reuse timeout: {session_reuse_timeout} seconds, "
-            f"max restored messages: {max_context_messages or 'unlimited'}"
+            f"Context carryover: last {max_context_messages or 'unlimited'} messages at every "
+            f"conversation boundary (no expiry); in-conversation history unbounded"
         )
         
         if not openai_api_key:
@@ -729,9 +735,14 @@ class Application:
             # Register end_conversation tool handler (tool always exposed).
             # broadcast_json delivers {"type":"stop_session"} to every connected
             # device; single-device setups are the norm, so broadcasting is fine.
+            # on_ended triggers the conversation rollover (server-side context
+            # trim + carryover note) once the device has ended the session.
             self.openai_service.register_function(
                 "end_conversation",
-                create_end_conversation_handler(self.websocket_handler.broadcast_json),
+                create_end_conversation_handler(
+                    self.websocket_handler.broadcast_json,
+                    self.websocket_handler.trigger_rollover,
+                ),
             )
             logger.info("✅ Registered end_conversation tool handler")
 
