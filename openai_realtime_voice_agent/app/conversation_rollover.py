@@ -158,6 +158,13 @@ class ConversationRollover:
         self._tracker = tracker
         self._max_carryover = max(1, int(max_carryover))
         self._rolling = False
+        self._refresh_hook = None  # set_refresh_hook: ConnectionRecovery.maybe_refresh_at_boundary
+
+    def set_refresh_hook(self, fn):
+        """Optional callable() invoked after each successful boundary rollover.
+        Used by ConnectionRecovery to refresh an aging session at the one
+        moment a reconnect is harmless (see BOUNDARY_REFRESH_AGE_S)."""
+        self._refresh_hook = fn
 
     async def rollover(self, reason: str) -> bool:
         """Trim the server-side conversation + inject the context note.
@@ -237,6 +244,11 @@ class ConversationRollover:
             f"🔄 conversation rollover ({reason[:50]}): {dropped} old item(s) removed, "
             f"{len(keep)} carried over, context note injected"
         )
+        if self._refresh_hook is not None:
+            try:
+                self._refresh_hook()
+            except Exception as e:
+                logger.debug(f"rollover: refresh hook error: {e!r}")
         return True
 
 

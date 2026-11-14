@@ -2,6 +2,23 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.14
+
+**The 60-minute session cap can no longer land mid-conversation (realistically).**
+OpenAI hard-closes a Realtime session at 60 minutes; a conversation that
+started near the cap and stayed active (no 60 s lull) would be killed
+mid-turn. Now the first conversation boundary (spoken stop / silence timeout —
+the rollover moment, when the mic is gated and nothing is in flight) past
+50 minutes of session age triggers the refresh immediately, so every
+conversation starting after it gets a fresh 60-minute window. The cap can now
+only bite a single conversation that runs continuously for ~an hour with no
+8-second pause — and even then recovery is graceful (in-place reconnect +
+carryover replay, ~2–3 s gap).
+
+Also fixes two carryover-limit inconsistencies introduced when the cap was
+raised 12 → 100: the rollover's server-side trim and the refresh-replay both
+hardcoded 12; both now follow MAX_CONTEXT_MESSAGES.
+
 ## 0.6.13
 
 **Proactive 55-min refresh can no longer fire while the device is still

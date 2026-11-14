@@ -174,6 +174,11 @@ class ConnectionRecovery(FrameProcessor):
     # while the house is genuinely quiet, so the cap practically never lands
     # mid-conversation (where it costs the user a turn).
     REFRESH_AGE_S = 55 * 60   # refresh once the session is this old
+    # Boundary-triggered refresh: at the first conversation boundary past this
+    # age, refresh immediately (a boundary is the one moment a reconnect is
+    # harmless). Ensures the 60-min cap can only bite a single conversation
+    # that runs continuously for ~an hour with no 8-s pause.
+    BOUNDARY_REFRESH_AGE_S = 50 * 60
     REFRESH_QUIET_S = 60.0    # ... and no mic audio flowed for this long
     REFRESH_CHECK_S = 60.0    # poll cadence of the background check
 
@@ -256,6 +261,20 @@ class ConnectionRecovery(FrameProcessor):
                     self._last_idle_unstick = now
                     asyncio.create_task(self._unstick_idle(msg))
         await self.push_frame(frame, direction)
+
+    def maybe_refresh_at_boundary(self):
+        """Conversation-boundary hook (called by the rollover). If the session
+        is old enough that the 60-min cap could land mid-conversation, refresh
+        NOW — mic gated, nothing in flight, device quiet."""
+        if self._reconnecting:
+            return
+        age = time.monotonic() - self._connected_at
+        if age < self.BOUNDARY_REFRESH_AGE_S:
+            return
+        if getattr(self._service, "_current_assistant_response", None) is not None:
+            return
+        asyncio.create_task(self._recover(
+            f"boundary refresh (session {age / 60:.0f} min old — ahead of the cap)"))
 
     async def _recover(self, reason: str):
         t0 = time.monotonic()
@@ -482,7 +501,8 @@ class WebSocketHandler:
         # on_conversation_item_created event handler registered below.
         from app.conversation_rollover import ConversationItemTracker, ConversationRollover, replay_carryover_after_reconnect
         item_tracker = ConversationItemTracker()
-        rollover = ConversationRollover(openai_service, item_tracker, max_carryover=12)
+        carry_limit = self.session_manager.max_restored_messages if self.session_manager else 12
+        rollover = ConversationRollover(openai_service, item_tracker, max_carryover=carry_limit)
         self._rollover = rollover
         self._rollover_client_id = client_id
         # After an in-place OpenAI reconnect (proactive 55-min refresh, error
@@ -495,7 +515,8 @@ class WebSocketHandler:
                     cached = pair.user()._context
             messages = cached.get_messages() if cached is not None else []
             # Bound the replay the same way the cache-restore path does.
-            carry = messages[-12:] if len(messages) > 12 else messages
+            limit = self.session_manager.max_restored_messages if self.session_manager else 12
+            carry = messages[-limit:] if len(messages) > limit else messages
             ended_at = None
             if self.session_manager and client_id in self.session_manager.context_caches:
                 ended_at = self.session_manager.context_caches[client_id].ended_at
@@ -513,13 +534,16 @@ class WebSocketHandler:
         # pipeline below, before transport.output().
         phase_emitter = PhaseEmitter(send_phase=self.broadcast_phase)
 
+        recovery = ConnectionRecovery(openai_service=openai_service, emit_idle=self.broadcast_phase,
+                                      phase_emitter=phase_emitter, on_reconnected=_on_reconnected)
+        rollover.set_refresh_hook(recovery.maybe_refresh_at_boundary)
+
         pipeline_components = [
             transport.input(),
             # Watch for OpenAI connection-death ErrorFrames (they travel upstream
             # to the task source, so place this upstream of the service) and
             # reconnect in place. Without it a 1011/1001 drop bricks the session.
-            ConnectionRecovery(openai_service=openai_service, emit_idle=self.broadcast_phase,
-                               phase_emitter=phase_emitter, on_reconnected=_on_reconnected),
+            recovery,
             InputResampler(out_rate=PIPELINE_SAMPLE_RATE),
             input_activity_tracker,
         ]
