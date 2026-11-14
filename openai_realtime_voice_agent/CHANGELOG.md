@@ -2,6 +2,27 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.15
+
+**get_entity_state now works on non-supervisor (plain Docker) installs.**
+The tool was written for Home Assistant OS / supervised installs and read
+states via the `supervisor` hostname — which does not exist on a plain
+Docker deployment, so EVERY call failed with a DNS error (the recurring
+"Temporary failure in name resolution") and the model received the upstream
+German error text ("Das Auslesen des Werts hat gerade nicht geklappt"),
+sometimes relaying it verbatim. The tool now talks to Home Assistant
+directly (HA_API_URL, default http://127.0.0.1:8123/api, same host as the
+MCP tools) over REST + WebSocket with the long-lived token.
+
+Also fixed while verifying: user-facing strings translated to English
+(upstream targeted a German install), English device-class synonyms added to
+the matching table ("temperature"/"humidity"/"battery"/"power"/"energy" —
+the table only knew the German spellings, so the device_class tiebreak never
+fired on English queries), and a contiguous-phrase bonus in entity matching
+so "bedroom temperature" prefers the "Bedroom temperature Temperature"
+climate sensor over "Bedroom Door Temperature" (a door contact that happens
+to report temperature).
+
 ## 0.6.14
 
 **The 60-minute session cap can no longer land mid-conversation (realistically).**

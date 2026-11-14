@@ -760,7 +760,10 @@ class Application:
             if _ha_token:
                 self.openai_service.register_function(
                     "get_entity_state",
-                    create_get_state_tool_handler(_ha_token),
+                    create_get_state_tool_handler(
+                        _ha_token,
+                        base_url=os.environ.get("HA_API_URL", "http://127.0.0.1:8123/api"),
+                    ),
                 )
                 logger.info("✅ Registered get_entity_state tool handler")
 

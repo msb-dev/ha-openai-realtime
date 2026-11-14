@@ -44,7 +44,8 @@ _SYNONYMS = {
     "akku": "battery", "batterie": "battery", "ladestand": "battery",
     "ladung": "battery", "soc": "battery", "akkustand": "battery",
     "batteriestand": "battery",
-    "temperatur": "temperature", "temp": "temperature",
+    "temperatur": "temperature", "temp": "temperature", "temperature": "temperature",
+    "humidity": "humidity", "battery": "battery", "power": "power", "energy": "energy",
     "feuchtigkeit": "humidity", "luftfeuchtigkeit": "humidity", "feuchte": "humidity",
     "leistung": "power", "strom": "power", "watt": "power",
     "energie": "energy", "verbrauch": "energy", "kwh": "energy",
@@ -127,7 +128,7 @@ def _query_terms(name: str) -> Tuple[set, set]:
 def _join_names(names: List[str]) -> str:
     if len(names) <= 1:
         return "".join(names)
-    return f"{', '.join(names[:-1])} oder {names[-1]}"
+    return f"{', '.join(names[:-1])} or {names[-1]}"
 
 
 def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> Dict[str, str]:
@@ -139,7 +140,7 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
     name_terms, dc_classes = _query_terms(name)
     norm_name = _norm(name).strip()
     if not name_terms:
-        return {"kind": "none", "text": f"Ich habe keinen Wert für „{name}“ gefunden."}
+        return {"kind": "none", "text": f"I couldn't find a value for {name}."}
 
     scored: List[Dict[str, Any]] = []
     for e in entities:
@@ -203,6 +204,14 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
             strength += 100
             strong = True
             covered = max(covered, 1)
+        elif norm_name and len(norm_name) >= 6 and norm_name in _norm(fn):
+            # the query appears as a contiguous phrase in the friendly name —
+            # strong evidence this is the exact sensor ("bedroom temperature"
+            # in "Bedroom temperature Temperature", not "Bedroom Door
+            # Temperature")
+            strength += 12
+            strong = True
+            covered = max(covered, 1)
 
         if covered == 0:
             continue
@@ -234,7 +243,7 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
         })
 
     if not scored:
-        return {"kind": "none", "text": f"Ich habe keinen Wert für „{name}“ gefunden."}
+        return {"kind": "none", "text": f"I couldn't find a value for {name}."}
 
     scored.sort(key=lambda c: (-c["covered"], -c["strength"], c["spec"]))
     best = scored[0]
@@ -246,7 +255,7 @@ def select_states(entities: List[Dict[str, Any]], name: str, limit: int = 2) -> 
         if len(top) >= 2:
             names = [c["label"] for c in scored[:3]]
             return {"kind": "clarify",
-                    "text": f"Ich habe mehrere Werte für „{name}“ — meinst du {_join_names(names)}?"}
+                    "text": f"I found several values for {name} — did you mean {_join_names(names)}?"}
         chosen = scored[:1]
     else:
         chosen = top[:limit]
@@ -297,7 +306,7 @@ _REGISTRY_TTL = 600.0
 _registry_cache: Dict[str, Any] = {"ts": 0.0, "area": {}, "aliases": {}}
 
 
-async def _fetch_registry(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+async def _fetch_registry(token: str, base_url: str = "http://127.0.0.1:8123/api") -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """(area_map, alias_map) from one HA WebSocket session.
 
     Reads area/device/entity registries and resolves each entity's *effective*
@@ -309,7 +318,7 @@ async def _fetch_registry(token: str) -> Tuple[Dict[str, str], Dict[str, List[st
         # max_size=None: the entity registry list on a large install exceeds the
         # library's default 1 MiB frame cap (observed 1009 "message too big").
         async with websockets.connect(
-            "ws://supervisor/core/api/websocket", max_size=None
+            base_url.replace("http", "ws", 1) + "/websocket", max_size=None
         ) as ws:
             await ws.recv()  # auth_required
             await ws.send(json.dumps({"type": "auth", "access_token": token}))
@@ -352,7 +361,7 @@ async def _fetch_registry(token: str) -> Tuple[Dict[str, str], Dict[str, List[st
     return await asyncio.wait_for(_run(), timeout=8)
 
 
-async def _enrich(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
+async def _enrich(token: str, base_url: str = "http://127.0.0.1:8123/api") -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     """Return (area_map, alias_map), refreshing the TTL cache. Fail-soft."""
     now = time.monotonic()
     if now - _registry_cache["ts"] < _REGISTRY_TTL and (
@@ -360,7 +369,7 @@ async def _enrich(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
     ):
         return _registry_cache["area"], _registry_cache["aliases"]
     try:
-        area_map, alias_map = await _fetch_registry(token)
+        area_map, alias_map = await _fetch_registry(token, base_url)
         _registry_cache["area"], _registry_cache["aliases"] = area_map, alias_map
         logger.info(f"get_entity_state: registry loaded ({len(area_map)} with area, "
                     f"{len(alias_map)} with aliases)")
@@ -372,7 +381,7 @@ async def _enrich(token: str) -> Tuple[Dict[str, str], Dict[str, List[str]]]:
 
 
 def create_get_state_tool_handler(
-    supervisor_token: str, base_url: str = "http://supervisor/core/api"
+    supervisor_token: str, base_url: str = "http://127.0.0.1:8123/api"
 ) -> Callable[["FunctionCallParams"], Awaitable[None]]:
     """Create a get_entity_state handler for pipecat's OpenAIRealtimeLLMService."""
 
@@ -381,10 +390,10 @@ def create_get_state_tool_handler(
         logger.info(f"📊 get_entity_state called: {name!r}")
 
         if not name:
-            await params.result_callback("Ich habe nicht verstanden, welcher Wert gemeint ist.")
+            await params.result_callback("I didn't catch which value you meant.")
             return
         if not supervisor_token:
-            await params.result_callback("Ich kann die Werte gerade nicht auslesen.")
+            await params.result_callback("I can't read the values right now.")
             return
 
         try:
@@ -393,7 +402,7 @@ def create_get_state_tool_handler(
                 resp = await client.get(f"{base_url}/states", headers=headers)
                 resp.raise_for_status()
                 states = resp.json()
-            area_map, alias_map = await _enrich(supervisor_token)
+            area_map, alias_map = await _enrich(supervisor_token, base_url)
 
             for s in states:
                 eid = s.get("entity_id", "")
@@ -405,6 +414,6 @@ def create_get_state_tool_handler(
             await params.result_callback(result["text"])
         except Exception as e:
             logger.error(f"❌ get_entity_state failed: {e}", exc_info=True)
-            await params.result_callback("Das Auslesen des Werts hat gerade nicht geklappt.")
+            await params.result_callback("I couldn't read that value just now.")
 
     return get_state_tool_handler
