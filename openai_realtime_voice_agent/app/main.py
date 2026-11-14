@@ -56,6 +56,38 @@ def _resolve_choice(env_var: str, custom_env_var: str, default: str) -> str:
 dotenv.load_dotenv()
 
 
+# --- 🔬 RAW EVENT TRACE (temporary diagnostic, RAW_EVENT_TRACE=1 enables) ---
+# pipecat's _receive_task_handler consumes every server event through
+# events.parse_server_event and SILENTLY DROPS the types its if/elif doesn't
+# know (input_audio_buffer.cleared, response.created/cancelled,
+# conversation.item.truncated, ...). Diagnosing the missing-
+# UserStartedSpeakingFrame failures (real turns killed by the dangling-VAD /
+# post-stop guards because speech_started never surfaced) requires seeing the
+# raw VAD event stream: did OpenAI send speech_started at all, and in what
+# order relative to clear/commit? This wraps parse_server_event to log every
+# event type except the high-frequency audio/text deltas (which would spam
+# ~100 lines/s). Gated behind RAW_EVENT_TRACE so normal runs stay quiet.
+if os.environ.get("RAW_EVENT_TRACE", "").strip() in ("1", "true", "yes"):
+    import pipecat.services.openai.realtime.llm as _oai_realtime_llm
+
+    _parse_server_event_orig = _oai_realtime_llm.events.parse_server_event
+    _RAW_EVENT_SKIP = {
+        "response.output_audio.delta",
+        "response.output_audio_transcript.delta",
+        "conversation.item.input_audio_transcription.delta",
+        "rate_limits.updated",
+    }
+
+    def _parse_server_event_logged(message):
+        evt = _parse_server_event_orig(message)
+        if evt is not None and evt.type not in _RAW_EVENT_SKIP:
+            logger.info(f"📩 {evt.type}")
+        return evt
+
+    _oai_realtime_llm.events.parse_server_event = _parse_server_event_logged
+    logger.info("🔬 RAW_EVENT_TRACE on — logging every non-delta server event type")
+
+
 class SafeRealtimeLLMService(OpenAIRealtimeLLMService):
     """OpenAIRealtimeLLMService with audio-truncation-on-interruption disabled.
 
