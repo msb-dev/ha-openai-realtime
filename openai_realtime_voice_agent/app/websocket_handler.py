@@ -309,8 +309,16 @@ class ConnectionRecovery(FrameProcessor):
                 age = now - self._connected_at
                 quiet = now - self._last_input_audio
                 busy = getattr(self._service, "_current_assistant_response", None) is not None
+                # Phase must be idle too: during a long tool-using reply the mic
+                # is gated, so `quiet` grows past 60 s while only `busy` blocks
+                # the refresh — and the moment response.done lands, busy clears
+                # and a refresh could fire while the device is still PLAYING
+                # the reply tail (drain). The phase stays "replying" until the
+                # drain completes, so requiring idle closes that window.
+                phase = getattr(self._phase_emitter, "_current", None) if self._phase_emitter else None
                 if (age >= self.REFRESH_AGE_S and quiet >= self.REFRESH_QUIET_S
-                        and not busy and now - self._last_attempt >= self.RECONNECT_COOLDOWN_S):
+                        and not busy and phase in (None, "idle")
+                        and now - self._last_attempt >= self.RECONNECT_COOLDOWN_S):
                     self._reconnecting = True
                     self._last_attempt = now
                     logger.info(

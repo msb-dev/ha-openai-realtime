@@ -2,6 +2,18 @@
 
 All notable changes to this add-on. Newest first.
 
+## 0.6.13
+
+**Proactive 55-min refresh can no longer fire while the device is still
+playing a reply.** During a long tool-using reply the mic is gated, so the
+"quiet" counter grows past 60 s while only the response-in-flight flag blocks
+the refresh — and the moment response.done landed, a refresh could fire during
+the playback drain. The refresh now also requires the backend phase to be
+idle (phase stays "replying" until the drain completes). Residual limitation,
+accepted: if the user has been silent ≥60 s and happens to wake inside the
+~2–3 s reconnect window itself, that first utterance is lost — bounded and
+rare.
+
 ## 0.6.12
 
 - **Carryover cap raised 12 → 100** (`MAX_CONTEXT_MESSAGES`): conversations
